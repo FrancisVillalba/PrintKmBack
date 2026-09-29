@@ -326,8 +326,6 @@ public class VentasImpresionController : ControllerBase
         var comisiones = await _context.ProductoComisiones
             .AsNoTracking()
             .Where(x => x.Estado)
-            .Where(x => x.FechaHasta == null || x.FechaHasta >= from)
-            .Where(x => x.FechaDesde == null || x.FechaDesde < toExclusive)
             .ToListAsync();
         var vendedorIds = ventas.Select(x => x.VendedorId).Distinct().ToHashSet();
         var perfilesPorUsuario = await _context.UsuarioPerfiles
@@ -345,9 +343,9 @@ public class VentasImpresionController : ControllerBase
             var totalComision = venta.Detalles
                 .Where(detalle => EstadosVentaComisionables.Contains(detalle.EstadoItem.Trim()))
                 .Where(EsDetalleComisionable)
-                .Sum(detalle => detalle.Cantidad * ResolveCommission(
-                    detalle.ProductoId, perfilComisionId, venta.FechaCreacion, comisiones) +
-                    (detalle.PrecioExtra ?? 0));
+                .Sum(detalle => Math.Round((detalle.Cantidad * detalle.PrecioUnitario) * ResolveCommission(
+                    detalle.ProductoId, perfilComisionId, venta.FechaCreacion, comisiones) / 100m, 0, MidpointRounding.AwayFromZero)
+                    + (detalle.PrecioExtra ?? 0));
 
             return new VentaUsuarioItemDto(
                 venta.Id,
@@ -420,9 +418,10 @@ public class VentasImpresionController : ControllerBase
         var ventasActivas = ventas.Where(x => !IsDeleted(x.EstadoVentaId, x.EstadoVenta?.Nombre)).ToList();
         var ventasDelDia = ventasActivas.Where(x => x.FechaCreacion.Date == today).ToList();
         var ventasDelMes = ventasActivas.Where(x => x.FechaCreacion >= monthStart && x.FechaCreacion < nextMonthStart).ToList();
-        var vendedores = await _context.Personas
+        var vendedores = await _context.Usuarios
             .AsNoTracking()
-            .ToDictionaryAsync(x => x.Id, x => NombrePersona(x));
+            .Include(x => x.Persona)
+            .ToDictionaryAsync(x => x.Id, NombreUsuario);
 
         var pedidosCargadosHoy = ventasDelDia.Count;
         var pedidosImpresos = ventasDelDia.Count(x => IsSent(x.EstadoVenta?.Nombre));
@@ -449,14 +448,19 @@ public class VentasImpresionController : ControllerBase
             }))
             .GroupBy(x => x.Maquina)
             .ToDictionary(x => x.Key, x => x.Sum(item => item.Monto), StringComparer.OrdinalIgnoreCase);
-        var pedidosMensualesPorMaquina = new[] { "UV DTF", "DTF TEXTIL" }
+        var metasMensuales = await GetMonthlyMachineGoalsAsync();
+        var nombresMaquina = pedidosMensualesPorGrupo.Keys
+            .Union(metasMensuales.Keys, StringComparer.OrdinalIgnoreCase)
+            .Where(nombre => !string.Equals(nombre, "Sin maquina", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(nombre => nombre)
+            .ToList();
+        var pedidosMensualesPorMaquina = nombresMaquina
             .Select(nombre => new DashboardMachineDto(nombre, pedidosMensualesPorGrupo.GetValueOrDefault(nombre, 0)))
             .ToList();
         var totalPedidosMensuales = pedidosMensualesPorMaquina.Sum(x => x.Cantidad);
 
-        var metasMensuales = await GetMonthlyMachineGoalsAsync();
         var metaMensualTotal = metasMensuales.Values.Sum();
-        var metasMensualesPorMaquina = new[] { "UV DTF", "DTF TEXTIL" }
+        var metasMensualesPorMaquina = nombresMaquina
             .Select(nombre =>
             {
                 var cantidad = pedidosMensualesPorMaquina
@@ -482,6 +486,8 @@ public class VentasImpresionController : ControllerBase
             metaMensualTotal > 0 && totalPedidosMensuales >= metaMensualTotal);
 
         var pendientesPago = ventasActivas
+            .Where(x => !x.Reposicion)
+            .Where(x => !IsExcludedFromPendingPayment(x.EstadoVentaId, x.EstadoVenta?.Nombre))
             .Select(x => new
             {
                 Cliente = x.Cliente?.Nombre ?? "Sin cliente",
@@ -491,16 +497,52 @@ public class VentasImpresionController : ControllerBase
             .GroupBy(x => x.Cliente)
             .Select(x => new DashboardMoneyDto(x.Key, x.Sum(item => item.Pendiente)))
             .OrderByDescending(x => x.Monto)
-            .Take(7)
+            .Take(13)
             .ToList();
 
-        var mejoresVendedores = ventasDelMes
+        var ventasComisionablesDelMes = ventasDelMes
+            .Where(EsVentaComisionable)
+            .ToList();
+        var vendedoresDelMesIds = ventasComisionablesDelMes
+            .Select(x => x.VendedorId)
+            .Distinct()
+            .ToHashSet();
+        var perfilVentasId = await ProfileIdAsync("Ventas");
+        var perfilVentaExternaId = await ProfileIdAsync("Venta Externa");
+        var perfilesPorVendedor = await _context.UsuarioPerfiles
+            .Include(x => x.Perfil)
+            .AsNoTracking()
+            .Where(x => x.Estado && x.Perfil != null && x.Perfil.Estado && vendedoresDelMesIds.Contains(x.UsuarioId))
+            .GroupBy(x => x.UsuarioId)
+            .ToDictionaryAsync(x => x.Key, x => x.Select(item => item.PerfilId).ToList());
+        var comisionesDelMes = await _context.ProductoComisiones
+            .AsNoTracking()
+            .Where(x => x.Estado)
+            .ToListAsync();
+
+        var mejoresVendedores = ventasComisionablesDelMes
             .GroupBy(x => x.VendedorId)
             .Select(x => new DashboardSellerDto(
                 vendedores.TryGetValue(x.Key, out var nombre) ? nombre : $"Vendedor {x.Key}",
-                x.Sum(item => item.TotalVenta)))
+                x.Sum(venta =>
+                {
+                    var perfilComisionId = SellerCommissionProfileId(
+                        venta.VendedorId,
+                        perfilesPorVendedor,
+                        perfilVentasId,
+                        perfilVentaExternaId);
+
+                    return venta.Detalles
+                        .Where(EsDetalleComisionable)
+                        .Sum(detalle => Math.Round((detalle.Cantidad * detalle.PrecioUnitario) * ResolveCommission(
+                            detalle.ProductoId,
+                            perfilComisionId,
+                            venta.FechaCreacion,
+                            comisionesDelMes) / 100m, 0, MidpointRounding.AwayFromZero)
+                            + (detalle.PrecioExtra ?? 0));
+                })))
             .OrderByDescending(x => x.Monto)
-            .Take(7)
+            .Take(10)
             .ToList();
 
         var now = DateTime.Now;
@@ -556,7 +598,8 @@ public class VentasImpresionController : ControllerBase
             "control" => ventas.Where(x => !IsDeleted(x.EstadoVentaId, x.EstadoVenta?.Nombre) && x.Detalles.Any(d => d.EstadoItem == "CO")),
             "enviados" => ventas.Where(x => !IsDeleted(x.EstadoVentaId, x.EstadoVenta?.Nombre) && x.Detalles.Any(d => d.EstadoItem == "EE" || d.EstadoItem == "ET") && x.FechaModificacion.Date == today),
             "incidencias" => ventas.Where(x => !IsDeleted(x.EstadoVentaId, x.EstadoVenta?.Nombre) && TieneIncidenciaActual(x)),
-            "pendientes-pago" => ventas.Where(x => !IsDeleted(x.EstadoVentaId, x.EstadoVenta?.Nombre) &&
+            "pendientes-pago" => ventas.Where(x => !x.Reposicion &&
+                !IsExcludedFromPendingPayment(x.EstadoVentaId, x.EstadoVenta?.Nombre) &&
                 Math.Max(x.TotalVenta - (x.MontoPagado ?? 0), 0) > 0 &&
                 (string.IsNullOrWhiteSpace(cliente) || string.Equals(x.Cliente?.Nombre, cliente, StringComparison.OrdinalIgnoreCase))),
             _ => Array.Empty<Models.VentaImpresionCab>()
@@ -909,10 +952,7 @@ public class VentasImpresionController : ControllerBase
         var fechaVenta = fecha.Date;
         return comisiones
             .Where(x => x.ProductoId == productoId && x.PerfilId == perfilId)
-            .Where(x => x.FechaDesde == null || x.FechaDesde.Value.Date <= fechaVenta)
-            .Where(x => x.FechaHasta == null || x.FechaHasta.Value.Date >= fechaVenta)
-            .OrderByDescending(x => x.FechaDesde ?? DateTime.MinValue)
-            .Select(x => x.MontoPorMetro)
+            .Select(x => x.Porcentaje)
             .FirstOrDefault();
     }
 
@@ -1027,6 +1067,14 @@ public class VentasImpresionController : ControllerBase
         return StatusContains(estadoId, "elimin")
             || StatusContains(estadoId, "eli")
             || StatusContains(estado, "elimin");
+    }
+
+    private static bool IsExcludedFromPendingPayment(string? estadoId, string? estado)
+    {
+        var normalizedId = (estadoId ?? string.Empty).Trim();
+        return IsDeleted(estadoId, estado)
+            || normalizedId.Equals("XX", StringComparison.OrdinalIgnoreCase)
+            || normalizedId.Equals("RE", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsSent(string? estado)
@@ -1225,63 +1273,26 @@ public class VentasImpresionController : ControllerBase
 
     private async Task<Dictionary<string, decimal>> GetMonthlyMachineGoalsAsync()
     {
-        var configurations = await _context.Configuraciones
-            .AsNoTracking()
-            .Where(x => x.Nombre.ToUpper().Contains("META") && x.Nombre.ToUpper().Contains("MENSUAL"))
-            .ToListAsync();
         var machines = await _context.TiposMaquina
             .AsNoTracking()
-            .ToDictionaryAsync(x => x.Id, x => x.Nombre);
-        var goals = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["UV DTF"] = 0,
-            ["DTF TEXTIL"] = 0
-        };
+            .Where(x => x.Estado)
+            .Select(x => new { x.Nombre, MetaMensual = x.MetaMensual ?? 0 })
+            .ToListAsync();
 
-        foreach (var configuration in configurations)
-        {
-            if (!decimal.TryParse(configuration.Valor, NumberStyles.Any, CultureInfo.InvariantCulture, out var goal) || goal <= 0)
-            {
-                continue;
-            }
-
-            var machineName = machines.GetValueOrDefault(configuration.NroConfiguracion)
-                ?? configuration.Nombre
-                    .Replace("META_MENSUAL", string.Empty, StringComparison.OrdinalIgnoreCase)
-                    .Replace("Meta mensual", string.Empty, StringComparison.OrdinalIgnoreCase)
-                    .Replace("_", " ")
-                    .Trim();
-            var groupName = MachineGroupName(machineName);
-
-            if (goals.ContainsKey(groupName))
-            {
-                goals[groupName] += goal;
-            }
-        }
-
-        return goals;
+        return machines
+            .GroupBy(x => MachineGroupName(x.Nombre), StringComparer.OrdinalIgnoreCase)
+            .Where(group => !string.Equals(group.Key, "Sin maquina", StringComparison.OrdinalIgnoreCase))
+            .ToDictionary(
+                group => group.Key,
+                group => group.Sum(machine => Math.Max(machine.MetaMensual, 0)),
+                StringComparer.OrdinalIgnoreCase);
     }
 
     private static string MachineGroupName(string? machineName)
     {
-        if (string.IsNullOrWhiteSpace(machineName))
-        {
-            return "Sin maquina";
-        }
-
-        var normalized = RemoveDiacritics(machineName);
-        if (normalized.Contains("uv", StringComparison.OrdinalIgnoreCase) &&
-            normalized.Contains("dtf", StringComparison.OrdinalIgnoreCase))
-        {
-            return "UV DTF";
-        }
-
-        if (normalized.Contains("dtf", StringComparison.OrdinalIgnoreCase))
-        {
-            return "DTF TEXTIL";
-        }
-
-        return machineName;
+        return string.IsNullOrWhiteSpace(machineName)
+            ? "Sin maquina"
+            : machineName.Trim();
     }
 
     private static string RemoveDiacritics(string value)

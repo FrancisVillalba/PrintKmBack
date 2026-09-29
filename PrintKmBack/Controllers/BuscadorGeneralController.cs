@@ -329,8 +329,6 @@ public class BuscadorGeneralController : ControllerBase
         var comisiones = await _context.ProductoComisiones
             .AsNoTracking()
             .Where(x => x.Estado)
-            .Where(x => x.FechaHasta == null || x.FechaHasta >= from)
-            .Where(x => x.FechaDesde == null || x.FechaDesde < toExclusive)
             .ToListAsync();
         var vendedorIds = ventas.Select(x => x.VendedorId).Distinct().ToHashSet();
         var perfilesPorUsuario = await _context.UsuarioPerfiles
@@ -348,9 +346,8 @@ public class BuscadorGeneralController : ControllerBase
             var totalComision = venta.Detalles
                 .Where(detalle => EstadosVentaComisionables.Contains(detalle.EstadoItem.Trim()))
                 .Where(EsDetalleComisionable)
-                .Sum(detalle => detalle.Cantidad * ResolveCommission(
-                    detalle.ProductoId, perfilComisionId, venta.FechaCreacion, comisiones) +
-                    (detalle.PrecioExtra ?? 0));
+                .Sum(detalle => Math.Round(((detalle.Cantidad * detalle.PrecioUnitario) + (detalle.PrecioExtra ?? 0)) * ResolveCommission(
+                    detalle.ProductoId, perfilComisionId, venta.FechaCreacion, comisiones) / 100m, 0, MidpointRounding.AwayFromZero));
 
             return new VentaUsuarioItemDto(
                 venta.Id,
@@ -428,9 +425,10 @@ public class BuscadorGeneralController : ControllerBase
         var ventasActivas = ventas.Where(x => !IsDeleted(x.EstadoVentaId, x.EstadoVenta?.Nombre)).ToList();
         var ventasDelDia = ventasActivas.Where(x => x.FechaCreacion.Date == today).ToList();
         var ventasDelMes = ventasActivas.Where(x => x.FechaCreacion >= monthStart && x.FechaCreacion < nextMonthStart).ToList();
-        var vendedores = await _context.Personas
+        var vendedores = await _context.Usuarios
             .AsNoTracking()
-            .ToDictionaryAsync(x => x.Id, x => NombrePersona(x));
+            .Include(x => x.Persona)
+            .ToDictionaryAsync(x => x.Id, NombreUsuario);
 
         var pedidosCargadosHoy = ventasDelDia.Count;
         var pedidosImpresos = ventasDelDia.Count(x => IsSent(x.EstadoVenta?.Nombre));
@@ -490,6 +488,8 @@ public class BuscadorGeneralController : ControllerBase
             metaMensualTotal > 0 && totalPedidosMensuales >= metaMensualTotal);
 
         var pendientesPago = ventasActivas
+            .Where(x => !x.Reposicion)
+            .Where(x => !IsExcludedFromPendingPayment(x.EstadoVentaId, x.EstadoVenta?.Nombre))
             .Select(x => new
             {
                 Cliente = x.Cliente?.Nombre ?? "Sin cliente",
@@ -499,7 +499,7 @@ public class BuscadorGeneralController : ControllerBase
             .GroupBy(x => x.Cliente)
             .Select(x => new DashboardMoneyDto(x.Key, x.Sum(item => item.Pendiente)))
             .OrderByDescending(x => x.Monto)
-            .Take(7)
+            .Take(13)
             .ToList();
 
         var mejoresVendedores = ventasDelMes
@@ -508,7 +508,7 @@ public class BuscadorGeneralController : ControllerBase
                 vendedores.TryGetValue(x.Key, out var nombre) ? nombre : $"Vendedor {x.Key}",
                 x.Sum(item => item.TotalVenta)))
             .OrderByDescending(x => x.Monto)
-            .Take(7)
+            .Take(10)
             .ToList();
 
         var now = DateTime.Now;
@@ -564,7 +564,8 @@ public class BuscadorGeneralController : ControllerBase
             "control" => ventas.Where(x => !IsDeleted(x.EstadoVentaId, x.EstadoVenta?.Nombre) && x.Detalles.Any(d => d.EstadoItem == "CO")),
             "enviados" => ventas.Where(x => !IsDeleted(x.EstadoVentaId, x.EstadoVenta?.Nombre) && x.Detalles.Any(d => d.EstadoItem == "EE" || d.EstadoItem == "ET") && x.FechaModificacion.Date == today),
             "incidencias" => ventas.Where(x => !IsDeleted(x.EstadoVentaId, x.EstadoVenta?.Nombre) && TieneIncidenciaActual(x)),
-            "pendientes-pago" => ventas.Where(x => !IsDeleted(x.EstadoVentaId, x.EstadoVenta?.Nombre) &&
+            "pendientes-pago" => ventas.Where(x => !x.Reposicion &&
+                !IsExcludedFromPendingPayment(x.EstadoVentaId, x.EstadoVenta?.Nombre) &&
                 Math.Max(x.TotalVenta - (x.MontoPagado ?? 0), 0) > 0 &&
                 (string.IsNullOrWhiteSpace(cliente) || string.Equals(x.Cliente?.Nombre, cliente, StringComparison.OrdinalIgnoreCase))),
             _ => Array.Empty<Models.VentaImpresionCab>()
@@ -925,10 +926,7 @@ public class BuscadorGeneralController : ControllerBase
         var fechaVenta = fecha.Date;
         return comisiones
             .Where(x => x.ProductoId == productoId && x.PerfilId == perfilId)
-            .Where(x => x.FechaDesde == null || x.FechaDesde.Value.Date <= fechaVenta)
-            .Where(x => x.FechaHasta == null || x.FechaHasta.Value.Date >= fechaVenta)
-            .OrderByDescending(x => x.FechaDesde ?? DateTime.MinValue)
-            .Select(x => x.MontoPorMetro)
+            .Select(x => x.Porcentaje)
             .FirstOrDefault();
     }
 
@@ -1043,6 +1041,14 @@ public class BuscadorGeneralController : ControllerBase
         return StatusContains(estadoId, "elimin")
             || StatusContains(estadoId, "eli")
             || StatusContains(estado, "elimin");
+    }
+
+    private static bool IsExcludedFromPendingPayment(string? estadoId, string? estado)
+    {
+        var normalizedId = (estadoId ?? string.Empty).Trim();
+        return IsDeleted(estadoId, estado)
+            || normalizedId.Equals("XX", StringComparison.OrdinalIgnoreCase)
+            || normalizedId.Equals("RE", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsSent(string? estado)

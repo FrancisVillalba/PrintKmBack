@@ -164,7 +164,7 @@ public static class DtoMapper
 
     public static ProductoDto ToDto(this Producto entity)
     {
-        return new ProductoDto(entity.Id, entity.Nombre, entity.PrecioBase, entity.PrecioMenor, entity.MaquinaId, entity.TipoMaquina?.Nombre, entity.Estado);
+        return new ProductoDto(entity.Id, entity.Nombre, entity.PrecioBase, entity.PrecioMenor, entity.CompraMinimaCm, entity.MaquinaId, entity.TipoMaquina?.Nombre, entity.Estado);
     }
 
     public static Producto ToEntity(this ProductoRequest request, Producto? entity = null)
@@ -173,6 +173,7 @@ public static class DtoMapper
         entity.Nombre = request.Nombre;
         entity.PrecioBase = request.PrecioBase;
         entity.PrecioMenor = request.PrecioMenor;
+        entity.CompraMinimaCm = request.CompraMinimaCm;
         entity.MaquinaId = request.MaquinaId;
         entity.Estado = request.Estado;
         return entity;
@@ -186,10 +187,8 @@ public static class DtoMapper
             entity.Producto?.Nombre,
             entity.PerfilId,
             entity.Perfil?.Nombre,
-            entity.MontoPorMetro,
-            entity.Estado,
-            entity.FechaDesde,
-            entity.FechaHasta);
+            entity.Porcentaje,
+            entity.Estado);
     }
 
     public static ProductoComision ToEntity(this ProductoComisionRequest request, ProductoComision? entity = null)
@@ -197,10 +196,8 @@ public static class DtoMapper
         entity ??= new ProductoComision();
         entity.ProductoId = request.ProductoId;
         entity.PerfilId = request.PerfilId;
-        entity.MontoPorMetro = request.MontoPorMetro;
+        entity.Porcentaje = request.Porcentaje;
         entity.Estado = request.Estado;
-        entity.FechaDesde = request.FechaDesde?.Date;
-        entity.FechaHasta = request.FechaHasta?.Date;
         return entity;
     }
 
@@ -220,13 +217,14 @@ public static class DtoMapper
 
     public static TipoMaquinaDto ToDto(this TipoMaquina entity)
     {
-        return new TipoMaquinaDto(entity.Id, entity.Nombre, entity.Estado);
+        return new TipoMaquinaDto(entity.Id, entity.Nombre, entity.MetaMensual ?? 0, entity.Estado);
     }
 
     public static TipoMaquina ToEntity(this TipoMaquinaRequest request, TipoMaquina? entity = null)
     {
         entity ??= new TipoMaquina();
         entity.Nombre = request.Nombre;
+        entity.MetaMensual = request.MetaMensual;
         entity.Estado = request.Estado;
         return entity;
     }
@@ -314,6 +312,7 @@ public static class DtoMapper
             entity.EstadoPagadoId,
             entity.EstadoPago?.Nombre,
             entity.FechaCreacion,
+            entity.FechaModificacion,
             entity.FechaEntrega,
             entity.ComprobantePago,
             entity.ComprobantePagoNombre,
@@ -382,7 +381,8 @@ public static class DtoMapper
             entity.Observacion,
             entity.EstadoItem,
             estadosVenta?.GetValueOrDefault(entity.EstadoItem) ?? entity.EstadoItem,
-            entity.CheckImpresion);
+            entity.CheckImpresion,
+            entity.FechaModificacion);
     }
 
     public static VentaImpresionDet ToEntity(this VentaImpresionDetRequest request, VentaImpresionDet? entity = null)

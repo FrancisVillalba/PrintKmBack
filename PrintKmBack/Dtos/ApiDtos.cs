@@ -106,9 +106,9 @@ public record PersonaRequest(
     string? Telefono,
     bool? Estado);
 
-public record ProductoDto(int Id, string Nombre, decimal PrecioBase, decimal PrecioMenor, int? MaquinaId, string? Maquina, bool Estado);
+public record ProductoDto(int Id, string Nombre, decimal PrecioBase, decimal PrecioMenor, decimal CompraMinimaCm, int? MaquinaId, string? Maquina, bool Estado);
 
-public record ProductoRequest([Required] string Nombre, [Range(0, double.MaxValue)] decimal PrecioBase, [Range(0, double.MaxValue)] decimal PrecioMenor, int? MaquinaId, bool Estado);
+public record ProductoRequest([Required] string Nombre, [Range(0, double.MaxValue)] decimal PrecioBase, [Range(0, double.MaxValue)] decimal PrecioMenor, [Range(0.01, double.MaxValue)] decimal CompraMinimaCm, int? MaquinaId, bool Estado);
 
 public record ProductoComisionDto(
     int Id,
@@ -116,26 +116,25 @@ public record ProductoComisionDto(
     string? Producto,
     int PerfilId,
     string? Perfil,
-    decimal MontoPorMetro,
-    bool Estado,
-    DateTime? FechaDesde,
-    DateTime? FechaHasta);
+    decimal Porcentaje,
+    bool Estado);
 
 public record ProductoComisionRequest(
     [Range(1, int.MaxValue)] int ProductoId,
     [Range(1, int.MaxValue)] int PerfilId,
-    [Range(0, double.MaxValue)] decimal MontoPorMetro,
-    bool Estado,
-    DateTime? FechaDesde,
-    DateTime? FechaHasta);
+    [Range(0, 100)] decimal Porcentaje,
+    bool Estado);
 
 public record PerfilDto(int Id, string Nombre, string? Descripcion, bool Estado);
 
 public record PerfilRequest([Required] string Nombre, string? Descripcion, bool Estado);
 
-public record TipoMaquinaDto(int Id, string Nombre, bool Estado);
+public record TipoMaquinaDto(int Id, string Nombre, decimal MetaMensual, bool Estado);
 
-public record TipoMaquinaRequest([Required] string Nombre, bool Estado);
+public record TipoMaquinaRequest(
+    [Required] string Nombre,
+    [Range(0, double.MaxValue)] decimal MetaMensual,
+    bool Estado);
 
 public record UsuarioDto(
     int Id,
@@ -267,6 +266,7 @@ public record VentaImpresionCabDto(
     string? EstadoPagadoId,
     string? EstadoPagado,
     DateTime FechaCreacion,
+    DateTime FechaModificacion,
     DateTime? FechaEntrega,
     string? ComprobantePago,
     string? ComprobantePagoNombre,
@@ -393,7 +393,8 @@ public record VentaImpresionDetDto(
     string? Observacion,
     string EstadoItem,
     string EstadoItemNombre,
-    bool? CheckImpresion);
+    bool? CheckImpresion,
+    DateTime FechaModificacion);
 
 public record ImpresionArchivoDto(
     int DetalleId,
@@ -530,6 +531,8 @@ public record VentaImpresionCompletaUpdateRequest(
     bool Reposicion,
     [StringLength(2)]
     string? EstadoVentaId,
+    DateTime? FechaModificacion,
+    bool CambiarEstado,
     [Required] IEnumerable<VentaImpresionDetalleUpdateRequest> Detalles);
 
 public record VentaImpresionDetalleUpdateRequest(

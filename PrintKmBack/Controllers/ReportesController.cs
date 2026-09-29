@@ -3,6 +3,7 @@ using System.IO.Compression;
 using System.Net;
 using System.Security.Claims;
 using System.Text;
+using System.Text.Json;
 using PrintKmBack.Data;
 using PrintKmBack.Dtos;
 using PrintKmBack.Models;
@@ -224,6 +225,7 @@ public class ReportesController : ControllerBase
         [FromQuery] DateTime? dateTo = null,
         [FromQuery] string? cliente = null,
         [FromQuery] string? estadoPago = null,
+        [FromQuery] string? formaPagoId = null,
         [FromQuery] int? vendedorId = null)
     {
         var from = (dateFrom ?? new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1)).Date;
@@ -231,16 +233,19 @@ public class ReportesController : ControllerBase
         var toExclusive = to.AddDays(1);
         var clientSearch = (cliente ?? string.Empty).Trim();
         var paymentStatus = (estadoPago ?? string.Empty).Trim().ToUpperInvariant();
+        var paymentMethod = (formaPagoId ?? string.Empty).Trim();
 
         var ventas = await _context.VentasImpresionCab
             .Include(x => x.Cliente)
             .Include(x => x.EstadoPago)
             .Include(x => x.EstadoVenta)
+            .Include(x => x.Pagos)
             .AsNoTracking()
             .Where(x => x.FechaCreacion >= from && x.FechaCreacion < toExclusive)
             .Where(x => !x.Reposicion)
             .Where(x => x.EstadoPagadoId == "P1" || x.EstadoPagadoId == "P2" || x.EstadoPagadoId == "P3")
             .Where(x => !vendedorId.HasValue || x.VendedorId == vendedorId.Value)
+            .Where(x => string.IsNullOrWhiteSpace(paymentMethod) || x.FormaPagoId == paymentMethod)
             .Where(x => string.IsNullOrWhiteSpace(paymentStatus)
                 || (paymentStatus == "PENDIENTE_PARCIAL" && (x.EstadoPagadoId == "P1" || x.EstadoPagadoId == "P2"))
                 || x.EstadoPagadoId == paymentStatus)
@@ -249,10 +254,17 @@ public class ReportesController : ControllerBase
             .ToListAsync();
 
         ventas = ventas
-            .Where(x => x.EstadoVenta?.Nombre?.Contains("elimin", StringComparison.OrdinalIgnoreCase) != true)
+            .Where(x => !IsExcludedFromPaymentReport(x.EstadoVentaId, x.EstadoVenta?.Nombre))
             .Where(x => string.IsNullOrWhiteSpace(clientSearch) ||
                 (x.Cliente?.Nombre ?? string.Empty).Contains(clientSearch, StringComparison.OrdinalIgnoreCase))
             .ToList();
+
+        var formasTransferencia = (await _context.FormasPago
+            .AsNoTracking()
+            .Where(x => x.Nombre != null && x.Nombre.Trim().ToLower() == "transferencia")
+            .Select(x => x.Id)
+            .ToListAsync())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         var vendedorIds = ventas.Select(x => x.VendedorId).Distinct().ToArray();
         var vendedores = await _context.Usuarios
@@ -277,7 +289,8 @@ public class ReportesController : ControllerBase
                     x.TotalVenta,
                     x.MontoPagado ?? 0,
                     Math.Max(x.TotalVenta - (x.MontoPagado ?? 0), 0),
-                    x.EstadoPago?.Nombre ?? (x.EstadoPagadoId == "P3" ? "Pagado" : x.EstadoPagadoId == "P2" ? "Pago parcial" : "Pendiente de pago")))
+                    x.EstadoPago?.Nombre ?? (x.EstadoPagadoId == "P3" ? "Pagado" : x.EstadoPagadoId == "P2" ? "Pago parcial" : "Pendiente de pago"),
+                    BuildTransferProofs(x, formasTransferencia)))
                     .OrderByDescending(x => x.Fecha)
                     .ToList();
                 var estados = pedidos.Select(x => x.EstadoPago).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
@@ -508,6 +521,7 @@ public class ReportesController : ControllerBase
             .Include(x => x.Cliente)
             .Include(x => x.Detalles).ThenInclude(x => x.Producto)
             .Include(x => x.EstadoVenta)
+            .Include(x => x.Pagos)
             .AsNoTracking()
             .Where(x => x.FechaCreacion >= from && x.FechaCreacion < toExclusive)
             .Where(x => vendedorId == null || scopeTeamLeaders || perfilId != null || x.VendedorId == vendedorId.Value)
@@ -550,8 +564,6 @@ public class ReportesController : ControllerBase
         var comisiones = await _context.ProductoComisiones
             .AsNoTracking()
             .Where(x => x.Estado)
-            .Where(x => x.FechaHasta == null || x.FechaHasta >= from)
-            .Where(x => x.FechaDesde == null || x.FechaDesde < toExclusive)
             .ToListAsync();
         var teamLeadersPorVendedor = await _context.GrupoVentaVendedores
             .Include(x => x.GrupoVenta)
@@ -626,7 +638,7 @@ public class ReportesController : ControllerBase
                     group.Key,
                     vendedores.GetValueOrDefault(group.Key, $"Usuario {group.Key}"),
                     pedidoIds.Count,
-                    ventas.Where(x => pedidoIds.Contains(x.Id)).Sum(x => x.TotalVenta),
+                    detalles.Sum(x => x.TotalDetalle),
                     detalles.Sum(x => x.ComisionTotal),
                     detalles);
             })
@@ -684,9 +696,11 @@ public class ReportesController : ControllerBase
         bool incluirExtra)
     {
         var precioExtra = detalle.PrecioExtra ?? 0;
-        var totalDetalle = detalle.PrecioTotal ?? (detalle.Cantidad * detalle.PrecioUnitario + precioExtra);
+        var totalDetalle = detalle.Cantidad * detalle.PrecioUnitario;
         var comisionUnitario = ResolveComision(detalle.ProductoId, usuarioComisionId, venta.FechaCreacion, perfilesPorUsuario, comisiones);
-        var comisionTotal = detalle.Cantidad * comisionUnitario + (incluirExtra ? precioExtra : 0);
+        var baseComision = detalle.Cantidad * detalle.PrecioUnitario;
+        var comision = Math.Round(baseComision * comisionUnitario / 100m, 0, MidpointRounding.AwayFromZero);
+        var comisionTotal = comision + (incluirExtra ? precioExtra : 0);
 
         return new ReporteComisionDetalleDto(
             venta.Id,
@@ -698,6 +712,7 @@ public class ReportesController : ControllerBase
             incluirExtra ? precioExtra : 0,
             totalDetalle,
             comisionUnitario,
+            comision,
             comisionTotal);
     }
 
@@ -711,9 +726,11 @@ public class ReportesController : ControllerBase
         int? vendedorOrigenId = null)
     {
         var precioExtra = detalle.PrecioExtra ?? 0;
-        var totalDetalle = detalle.PrecioTotal ?? (detalle.Cantidad * detalle.PrecioUnitario + precioExtra);
+        var totalDetalle = detalle.Cantidad * detalle.PrecioUnitario;
         var comisionUnitario = ResolveComisionPorPerfil(detalle.ProductoId, perfilComisionId, venta.FechaCreacion, comisiones);
-        var comisionTotal = detalle.Cantidad * comisionUnitario + (incluirExtra ? precioExtra : 0);
+        var baseComision = detalle.Cantidad * detalle.PrecioUnitario;
+        var comision = Math.Round(baseComision * comisionUnitario / 100m, 0, MidpointRounding.AwayFromZero);
+        var comisionTotal = comision + (incluirExtra ? precioExtra : 0);
 
         return new ReporteComisionDetalleDto(
             venta.Id,
@@ -725,6 +742,7 @@ public class ReportesController : ControllerBase
             incluirExtra ? precioExtra : 0,
             totalDetalle,
             comisionUnitario,
+            comision,
             comisionTotal,
             vendedorOrigen,
             vendedorOrigenId);
@@ -745,10 +763,7 @@ public class ReportesController : ControllerBase
         var fechaVenta = fecha.Date;
         return comisiones
             .Where(x => x.ProductoId == productoId && perfilIds.Contains(x.PerfilId))
-            .Where(x => x.FechaDesde == null || x.FechaDesde.Value.Date <= fechaVenta)
-            .Where(x => x.FechaHasta == null || x.FechaHasta.Value.Date >= fechaVenta)
-            .OrderByDescending(x => x.FechaDesde ?? DateTime.MinValue)
-            .Select(x => x.MontoPorMetro)
+            .Select(x => x.Porcentaje)
             .FirstOrDefault();
     }
 
@@ -766,10 +781,7 @@ public class ReportesController : ControllerBase
         var fechaVenta = fecha.Date;
         return comisiones
             .Where(x => x.ProductoId == productoId && x.PerfilId == perfilId)
-            .Where(x => x.FechaDesde == null || x.FechaDesde.Value.Date <= fechaVenta)
-            .Where(x => x.FechaHasta == null || x.FechaHasta.Value.Date >= fechaVenta)
-            .OrderByDescending(x => x.FechaDesde ?? DateTime.MinValue)
-            .Select(x => x.MontoPorMetro)
+            .Select(x => x.Porcentaje)
             .FirstOrDefault();
     }
 
@@ -777,7 +789,7 @@ public class ReportesController : ControllerBase
     {
         var rows = new List<string[]>
         {
-            new[] { "Vendedor", "Pedido", "Fecha", "Cliente", "Producto", "Cantidad", "Precio unitario", "Precio extra", "Total detalle", "Comision unitario", "Comision total" }
+            new[] { "Vendedor", "Pedido", "Fecha", "Cliente", "Producto", "Cantidad", "Precio unitario", "Precio extra", "Total detalle", "Comision unitario", "Comision", "Comision total" }
         };
 
         foreach (var seller in report.Vendedores)
@@ -808,7 +820,8 @@ public class ReportesController : ControllerBase
                 Money(detail.PrecioUnitario),
                 Money(detail.PrecioExtra),
                 Money(detail.TotalDetalle),
-                Money(detail.ComisionUnitario),
+                detail.ComisionUnitario.ToString("N2", CultureInfo.CurrentCulture) + " %",
+                Money(detail.Comision),
                 Money(detail.ComisionTotal)
             }));
         }
@@ -1194,6 +1207,73 @@ public class ReportesController : ControllerBase
             lote.Estado);
     }
 
+    private static bool IsExcludedFromPaymentReport(string? estadoId, string? estado)
+    {
+        var normalizedId = (estadoId ?? string.Empty).Trim();
+        var normalizedState = (estado ?? string.Empty).Trim();
+        return normalizedId.Equals("XX", StringComparison.OrdinalIgnoreCase)
+            || normalizedId.Equals("RE", StringComparison.OrdinalIgnoreCase)
+            || normalizedId.Contains("elimin", StringComparison.OrdinalIgnoreCase)
+            || normalizedState.Contains("elimin", StringComparison.OrdinalIgnoreCase);
+    }
+    private static IReadOnlyList<ReporteClienteComprobanteDto> BuildTransferProofs(
+        VentaImpresionCab venta,
+        IReadOnlySet<string> formasTransferencia)
+    {
+        var comprobantes = venta.Pagos
+            .Where(p => formasTransferencia.Contains(p.FormaPagoId) && !string.IsNullOrWhiteSpace(p.RutaComprobante))
+            .OrderByDescending(p => p.FechaHora)
+            .Select(p => new ReporteClienteComprobanteDto(
+                p.FechaHora,
+                p.Monto,
+                p.RutaComprobante!,
+                string.IsNullOrWhiteSpace(p.NombreComprobante) ? "Comprobante de transferencia" : p.NombreComprobante))
+            .ToList();
+
+        if (!formasTransferencia.Contains(venta.FormaPagoId) || string.IsNullOrWhiteSpace(venta.ComprobantePago))
+        {
+            return comprobantes;
+        }
+
+        var rutas = ParseStoredValues(venta.ComprobantePago);
+        var nombres = ParseStoredValues(venta.ComprobantePagoNombre);
+        for (var index = 0; index < rutas.Count; index++)
+        {
+            var ruta = rutas[index];
+            if (string.IsNullOrWhiteSpace(ruta) || comprobantes.Any(x => string.Equals(x.Ruta, ruta, StringComparison.OrdinalIgnoreCase)))
+            {
+                continue;
+            }
+
+            var nombre = index < nombres.Count && !string.IsNullOrWhiteSpace(nombres[index])
+                ? nombres[index]
+                : "Comprobante de transferencia";
+            comprobantes.Add(new ReporteClienteComprobanteDto(
+                venta.FechaCreacion,
+                venta.MontoPagado ?? 0,
+                ruta,
+                nombre));
+        }
+
+        return comprobantes.OrderByDescending(x => x.Fecha).ToList();
+    }
+
+    private static IReadOnlyList<string> ParseStoredValues(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return Array.Empty<string>();
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<List<string>>(value) ?? new List<string>();
+        }
+        catch (JsonException)
+        {
+            return new[] { value };
+        }
+    }
     private static string NombreUsuario(Usuario usuario)
     {
         return usuario.Persona is null ? usuario.NombreUsuario ?? $"Usuario {usuario.Id}" : NombrePersona(usuario.Persona);
@@ -1675,7 +1755,7 @@ public class ReportesController : ControllerBase
         {
             writer.Text(MarginX, y, $"Detalle por maquina: {Trim(product, 20)}", 10, bold: true, 0.05m, 0.28m, 0.48m);
             writer.Text(MarginX + 166, y, "|", 10, bold: false, 0, 0, 0);
-            writer.Text(MarginX + 180, y, $"Comision x metro: {Money(commissionUnit)}", 8, bold: false, 0, 0, 0);
+            writer.Text(MarginX + 180, y, $"Comision: {commissionUnit:N2} %", 8, bold: false, 0, 0, 0);
 
             y -= 8;
             var widths = isTeamLeaderReport
@@ -1689,7 +1769,7 @@ public class ReportesController : ControllerBase
 
             foreach (var detail in group.OrderBy(x => x.Fecha).ThenBy(x => x.Cliente))
             {
-                var comisionProducto = detail.Cantidad * detail.ComisionUnitario;
+                var comisionProducto = detail.Comision;
                 var values = isTeamLeaderReport
                     ? new[]
                     {
@@ -1718,7 +1798,7 @@ public class ReportesController : ControllerBase
                 y -= 13;
             }
 
-            var subtotalComisionProducto = group.Sum(x => x.Cantidad * x.ComisionUnitario);
+            var subtotalComisionProducto = group.Sum(x => x.Comision);
             var subtotalValues = isTeamLeaderReport
                 ? new[]
                 {

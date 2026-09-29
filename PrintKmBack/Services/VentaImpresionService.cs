@@ -129,6 +129,15 @@ public class VentaImpresionService : IVentaImpresionService
             return null;
         }
 
+        if (request.FechaModificacion.HasValue &&
+            Math.Abs((request.FechaModificacion.Value - cabecera.FechaModificacion).TotalMilliseconds) > 10)
+        {
+            throw new DbUpdateConcurrencyException(
+                "Este pedido fue actualizado por otro usuario. Recargue la pagina antes de continuar.");
+        }
+
+        _context.Entry(cabecera).Property(x => x.FechaModificacion).OriginalValue = cabecera.FechaModificacion;
+
         var detalles = request.Detalles?.ToList() ?? new List<VentaImpresionDetalleUpdateRequest>();
         if (detalles.Count == 0)
         {
@@ -185,9 +194,14 @@ public class VentaImpresionService : IVentaImpresionService
         await ValidarCabeceraAsync(request, totalVenta.TotalVenta);
         var estadoAnteriorId = EstadoActualPedidoId(cabecera);
         await ValidarVentaEditableAsync(estadoAnteriorId);
-        await ValidarTransicionEstadoAsync(estadoAnteriorId, request.EstadoVentaId);
-        await ValidarAdjuntosParaImpresionAsync(estadoAnteriorId, request.EstadoVentaId, detalles);
-        var estadoVentaId = await ResolverEstadoVentaIdAsync(request.EstadoVentaId);
+        if (request.CambiarEstado)
+        {
+            await ValidarTransicionEstadoAsync(estadoAnteriorId, request.EstadoVentaId);
+            await ValidarAdjuntosParaImpresionAsync(estadoAnteriorId, request.EstadoVentaId, detalles);
+        }
+        var estadoVentaId = request.CambiarEstado
+            ? await ResolverEstadoVentaIdAsync(request.EstadoVentaId)
+            : estadoAnteriorId;
 
         await using var transaction = await _context.Database.BeginTransactionAsync();
 
@@ -222,7 +236,10 @@ public class VentaImpresionService : IVentaImpresionService
             detalle.ArchivoDisenio = NormalizarRutaArchivo(detalleRequest.ArchivoDisenio);
             detalle.ArchivoDisenioNombre = detalleRequest.ArchivoDisenioNombre;
             detalle.Observacion = detalleRequest.Observacion;
-            detalle.EstadoItem = estadoVentaId;
+            if (request.CambiarEstado || !detalleRequest.Id.HasValue)
+            {
+                detalle.EstadoItem = estadoVentaId;
+            }
             detalle.CheckImpresion = detalle.CheckImpresion == true || detalleRequest.CheckImpresion == true;
 
             if (!detalleRequest.Id.HasValue)
@@ -730,12 +747,6 @@ public class VentaImpresionService : IVentaImpresionService
         decimal precioUnitario,
         decimal? precioExtra)
     {
-        var compraMinimaCm = await CompraMinimaCmAsync();
-        if (cantidad < compraMinimaCm)
-        {
-            throw new InvalidOperationException($"La compra minima es de {compraMinimaCm:N2} cm.");
-        }
-
         if (precioUnitario < 0 || precioExtra < 0)
         {
             throw new InvalidOperationException("Los precios no pueden ser negativos.");
@@ -757,6 +768,11 @@ public class VentaImpresionService : IVentaImpresionService
         if (producto is null)
         {
             throw new InvalidOperationException($"El producto {productoId} no existe o esta inactivo.");
+        }
+
+        if (cantidad < producto.CompraMinimaCm)
+        {
+            throw new InvalidOperationException($"La compra minima para {producto.Nombre} es de {producto.CompraMinimaCm:N2} cm.");
         }
 
         if (!await _context.TiposMaquina.AnyAsync(x => x.Id == tipoMaquinaId && x.Estado))

@@ -354,6 +354,7 @@ public class EvaluSystemDbContext : DbContext
             entity.Property(e => e.Nombre).HasColumnName("nombre").HasMaxLength(150).IsRequired();
             entity.Property(e => e.PrecioBase).HasColumnName("precio_base").HasPrecision(18, 2);
             entity.Property(e => e.PrecioMenor).HasColumnName("precio_menor").HasPrecision(18, 2).HasDefaultValue(200000m);
+            entity.Property(e => e.CompraMinimaCm).HasColumnName("compra_minima_cm").HasPrecision(18, 2).HasDefaultValue(0.20m);
             entity.Property(e => e.MaquinaId).HasColumnName("maquinaId");
             entity.Property(e => e.Estado).HasColumnName("estado");
             entity.Property(e => e.UsuCreacion).HasColumnName("usu_creacion");
@@ -371,10 +372,9 @@ public class EvaluSystemDbContext : DbContext
             entity.Property(e => e.Id).HasColumnName("id");
             entity.Property(e => e.ProductoId).HasColumnName("productoId");
             entity.Property(e => e.PerfilId).HasColumnName("perfilId");
-            entity.Property(e => e.MontoPorMetro).HasColumnName("monto_por_metro").HasPrecision(18, 2);
+            // Se conserva el nombre fisico para evitar una migracion destructiva; ahora representa un porcentaje.
+            entity.Property(e => e.Porcentaje).HasColumnName("monto_por_metro").HasPrecision(5, 2);
             entity.Property(e => e.Estado).HasColumnName("estado");
-            entity.Property(e => e.FechaDesde).HasColumnName("fecha_desde").HasColumnType("date");
-            entity.Property(e => e.FechaHasta).HasColumnName("fecha_hasta").HasColumnType("date");
             entity.Property(e => e.FechaCreacion).HasColumnName("fecha_creacion").HasColumnType("datetime");
             entity.Property(e => e.UsuCreacion).HasColumnName("usu_creacion");
             entity.Property(e => e.FechaModificacion).HasColumnName("fecha_modificacion").HasColumnType("datetime");
@@ -422,6 +422,7 @@ public class EvaluSystemDbContext : DbContext
             entity.ToTable("Tipo_maquina");
             entity.HasKey(e => e.Id);
             entity.Property(e => e.Nombre).HasColumnName("nombre").HasMaxLength(100).IsRequired();
+            entity.Property(e => e.MetaMensual).HasColumnName("meta_mensual").HasPrecision(18, 2).HasDefaultValue(0m);
             entity.Property(e => e.Estado).HasColumnName("estado");
             entity.Property(e => e.FechaCreacion).HasColumnName("fecha_creacion").HasColumnType("datetime");
             entity.Property(e => e.UsuCreacion).HasColumnName("usu_creacion").IsRequired();
@@ -510,7 +511,7 @@ public class EvaluSystemDbContext : DbContext
             entity.Property(e => e.FechaTomaDelivery).HasColumnName("fecha_toma_delivery").HasColumnType("datetime");
             entity.Property(e => e.FechaCreacion).HasColumnName("fecha_creacion").HasColumnType("datetime");
             entity.Property(e => e.UsuCreacion).HasColumnName("usu_creacion");
-            entity.Property(e => e.FechaModificacion).HasColumnName("fecha_modificacion").HasColumnType("datetime");
+            entity.Property(e => e.FechaModificacion).HasColumnName("fecha_modificacion").HasColumnType("datetime").IsConcurrencyToken();
             entity.Property(e => e.UsuModificacion).HasColumnName("usu_modificacion");
             entity.HasOne(e => e.Cliente).WithMany(e => e.Ventas).HasForeignKey(e => e.ClienteId);
             entity.HasOne(e => e.FormaPago).WithMany(e => e.Ventas).HasForeignKey(e => e.FormaPagoId);
