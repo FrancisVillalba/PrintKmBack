@@ -66,8 +66,16 @@ public class VentaImpresionService : IVentaImpresionService
 
         await using var transaction = await _context.Database.BeginTransactionAsync();
 
+        var sucursalId = await _context.Usuarios
+            .Where(x => x.Id == request.VendedorId && x.Estado == true && x.Sucursal != null && x.Sucursal.Estado)
+            .Select(x => (int?)x.SucursalId)
+            .SingleOrDefaultAsync();
+        if (!sucursalId.HasValue)
+            throw new InvalidOperationException("El usuario vendedor debe tener una sucursal activa asignada para registrar ventas.");
+
         var cabecera = new VentaImpresionCab
         {
+            SucursalId = sucursalId,
             ClienteId = request.ClienteId,
             FormaPagoId = request.FormaPagoId,
             TotalVenta = totalVenta.TotalVenta,
@@ -1244,6 +1252,7 @@ public class VentaImpresionService : IVentaImpresionService
     private IQueryable<VentaImpresionCab> QueryVentaCompleta()
     {
         return _context.VentasImpresionCab
+            .Include(x => x.Sucursal)
             .Include(x => x.Cliente)
             .Include(x => x.FormaPago)
             .Include(x => x.EstadoPago)

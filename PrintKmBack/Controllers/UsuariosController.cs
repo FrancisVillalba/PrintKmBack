@@ -26,6 +26,7 @@ public class UsuariosController : ControllerBase
     {
         var items = await _context.Usuarios
             .Include(x => x.Persona)
+            .Include(x => x.Sucursal)
             .Include(x => x.Perfiles)
             .ThenInclude(x => x.Perfil)
             .AsNoTracking()
@@ -33,11 +34,24 @@ public class UsuariosController : ControllerBase
         return Ok(items.Select(x => x.ToDto()));
     }
 
+    [HttpGet("personas")]
+    public async Task<ActionResult<IEnumerable<PersonaDto>>> GetPersonas()
+    {
+        var personas = await _context.Personas.AsNoTracking().ToListAsync();
+        return Ok(personas.Select(x => x.ToDto()));
+    }
+
+    [HttpGet("sucursales")]
+    public async Task<ActionResult<IEnumerable<SucursalDto>>> GetSucursales() =>
+        Ok(await _context.Sucursales.AsNoTracking().OrderBy(x => x.Nombre)
+            .Select(x => new SucursalDto(x.Id, x.Nombre, x.Direccion, x.Estado)).ToListAsync());
+
     [HttpGet("{id:int}")]
     public async Task<ActionResult<UsuarioDto>> GetById(int id)
     {
         var item = await _context.Usuarios
             .Include(x => x.Persona)
+            .Include(x => x.Sucursal)
             .Include(x => x.Perfiles)
             .ThenInclude(x => x.Perfil)
             .AsNoTracking()
@@ -56,6 +70,12 @@ public class UsuariosController : ControllerBase
             return BadRequest(new { message = "Ya existe un usuario con ese nombre de usuario." });
         }
 
+
+        var error = await ValidarUsuarioAsync(request);
+        if (error is not null)
+            return BadRequest(new { message = error });
+
+        await using var transaction = await _context.Database.BeginTransactionAsync();
         var item = request.ToEntity();
         item.NombreUsuario = nombreUsuario;
         if (!string.IsNullOrWhiteSpace(request.Pass))
@@ -66,6 +86,7 @@ public class UsuariosController : ControllerBase
         _context.Usuarios.Add(item);
         await _context.SaveChangesAsync();
         await SyncPerfilesAsync(item.Id, request.PerfilIds);
+        await transaction.CommitAsync();
         var created = await QueryUsuario().FirstAsync(x => x.Id == item.Id);
         return CreatedAtAction(nameof(GetById), new { id = item.Id }, created.ToDto());
     }
@@ -81,6 +102,12 @@ public class UsuariosController : ControllerBase
             return NotFound();
         }
 
+
+        var error = await ValidarUsuarioAsync(request, item.SucursalId);
+        if (error is not null)
+            return BadRequest(new { message = error });
+
+        await using var transaction = await _context.Database.BeginTransactionAsync();
         request.ToEntity(item);
         if (!string.IsNullOrWhiteSpace(request.Pass))
         {
@@ -89,6 +116,7 @@ public class UsuariosController : ControllerBase
 
         await SyncPerfilesAsync(item.Id, request.PerfilIds);
         await _context.SaveChangesAsync();
+        await transaction.CommitAsync();
         return NoContent();
     }
 
@@ -106,10 +134,24 @@ public class UsuariosController : ControllerBase
         return NoContent();
     }
 
+
+    private async Task<string?> ValidarUsuarioAsync(UsuarioRequest request, int? sucursalActualId = null)
+    {
+        if (request.PersonaId.HasValue && !await _context.Personas.AnyAsync(x => x.Id == request.PersonaId.Value))
+            return "La persona seleccionada no existe.";
+
+        var sucursalId = request.SucursalId ?? sucursalActualId ?? 1;
+        if (!await _context.Sucursales.AnyAsync(x => x.Id == sucursalId && (x.Estado || x.Id == sucursalActualId)))
+            return "Seleccione una sucursal activa para el usuario.";
+
+        return null;
+    }
+
     private IQueryable<Usuario> QueryUsuario()
     {
         return _context.Usuarios
             .Include(x => x.Persona)
+            .Include(x => x.Sucursal)
             .Include(x => x.Perfiles)
             .ThenInclude(x => x.Perfil)
             .AsNoTracking();

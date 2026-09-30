@@ -1,3 +1,5 @@
+using System.ComponentModel.DataAnnotations;
+
 namespace PrintKmBack.Dtos;
 
 public record PagoVentaImpresionDto(
@@ -16,3 +18,15 @@ public record PagoVentaImpresionRequest(
     decimal Monto,
     string? RutaComprobante,
     string? NombreComprobante);
+
+public record ActualizarPagoVentaRequest(
+    [Required]
+    [StringLength(1)]
+    string FormaPagoId,
+    decimal? MontoPagado,
+    [StringLength(50)]
+    string? EstadoPagadoId,
+    [StringLength(5000)]
+    string? ComprobantePago,
+    [StringLength(255)]
+    string? ComprobantePagoNombre);

@@ -13,3 +13,5 @@ public record ArchivoBase64Response(
     string ContentType,
     string Base64,
     long TamanioBytes);
+
+public record ExcelFileDto(string FileName, string ContentType, string Bytes);

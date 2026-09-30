@@ -45,6 +45,7 @@ public class PersonasController : ControllerBase
             }
         }
 
+
         var item = request.ToEntity();
         item.Documento = documento;
         _context.Personas.Add(item);
@@ -61,10 +62,12 @@ public class PersonasController : ControllerBase
             return NotFound();
         }
 
+
         request.ToEntity(item);
         await _context.SaveChangesAsync();
         return NoContent();
     }
+
 
     [HttpDelete("{id:int}")]
     public async Task<IActionResult> Delete(int id)

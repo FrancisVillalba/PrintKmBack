@@ -3,6 +3,8 @@ namespace PrintKmBack.Models;
 public class VentaImpresionCab
 {
     public int Id { get; set; }
+    public int? SucursalId { get; set; }
+    public Sucursal? Sucursal { get; set; }
     public int ClienteId { get; set; }
     public string FormaPagoId { get; set; } = string.Empty;
     public decimal TotalVenta { get; set; }

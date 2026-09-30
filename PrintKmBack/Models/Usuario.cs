@@ -3,6 +3,8 @@ namespace PrintKmBack.Models;
 public class Usuario
 {
     public int Id { get; set; }
+    public int SucursalId { get; set; } = 1;
+    public Sucursal? Sucursal { get; set; }
     public string? NombreUsuario { get; set; }
     public string? PassHash { get; set; }
     public int? PersonaId { get; set; }

@@ -39,6 +39,7 @@ public class EvaluSystemDbContext : DbContext
     public DbSet<TipoDocumento> TiposDocumento => Set<TipoDocumento>();
     public DbSet<TipoMaquina> TiposMaquina => Set<TipoMaquina>();
     public DbSet<Transportadora> Transportadoras => Set<Transportadora>();
+    public DbSet<Sucursal> Sucursales => Set<Sucursal>();
     public DbSet<Usuario> Usuarios => Set<Usuario>();
     public DbSet<UsuarioMensajeAceptado> UsuarioMensajesAceptados => Set<UsuarioMensajeAceptado>();
     public DbSet<UsuarioPerfil> UsuarioPerfiles => Set<UsuarioPerfil>();
@@ -446,9 +447,22 @@ public class EvaluSystemDbContext : DbContext
             entity.Property(e => e.UsuModificacion).HasColumnName("usu_modificacion");
         });
 
+        modelBuilder.Entity<Sucursal>(entity =>
+        {
+            entity.ToTable("Sucursal");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).HasColumnName("id");
+            entity.Property(e => e.Nombre).HasColumnName("nombre").HasMaxLength(100).IsRequired();
+            entity.Property(e => e.Direccion).HasColumnName("direccion").HasMaxLength(250);
+            entity.Property(e => e.Estado).HasColumnName("estado");
+        });
+
         modelBuilder.Entity<Usuario>(entity =>
         {
             entity.ToTable("Usuario");
+            entity.Property(e => e.SucursalId).HasColumnName("sucursal_id").HasDefaultValue(1);
+            entity.HasIndex(e => e.SucursalId);
+            entity.HasOne(e => e.Sucursal).WithMany().HasForeignKey(e => e.SucursalId).OnDelete(DeleteBehavior.NoAction);
             entity.HasKey(e => e.Id);
             entity.Property(e => e.Id).HasColumnName("id");
             entity.Property(e => e.NombreUsuario).HasColumnName("usuario").HasMaxLength(50);
@@ -491,6 +505,9 @@ public class EvaluSystemDbContext : DbContext
         modelBuilder.Entity<VentaImpresionCab>(entity =>
         {
             entity.ToTable("Ventas_impresion_cab");
+            entity.Property(e => e.SucursalId).HasColumnName("sucursal_id");
+            entity.HasIndex(e => e.SucursalId);
+            entity.HasOne(e => e.Sucursal).WithMany().HasForeignKey(e => e.SucursalId).OnDelete(DeleteBehavior.NoAction);
             entity.HasKey(e => e.Id);
             entity.Property(e => e.ClienteId).HasColumnName("clienteId");
             entity.Property(e => e.FormaPagoId).HasColumnName("formaPagoId").HasMaxLength(1).IsRequired();

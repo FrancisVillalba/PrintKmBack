@@ -34,6 +34,7 @@ public class PermissionAuthorizationFilter : IAsyncAuthorizationFilter
         ["Archivos"] = "Pedidos",
         ["Personas"] = "Personas",
         ["Usuarios"] = "Usuarios",
+        ["Sucursales"] = "Usuarios",
         ["Perfiles"] = "Perfiles",
         ["Permisos"] = "Perfiles",
         ["Configuraciones"] = "Configuraciones",

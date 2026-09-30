@@ -110,6 +110,7 @@ public class VentasImpresionController : ControllerBase
             .ToListAsync();
         var usuarios = await _context.Usuarios
             .Include(x => x.Persona)
+            .Include(x => x.Sucursal)
             .AsNoTracking()
             .Where(x => x.Estado != false)
             .ToListAsync();
@@ -142,6 +143,7 @@ public class VentasImpresionController : ControllerBase
         var formasPago = await _context.FormasPago.AsNoTracking().Where(x => x.Estado != false).ToListAsync();
         var usuarios = await _context.Usuarios
             .Include(x => x.Persona)
+            .Include(x => x.Sucursal)
             .AsNoTracking()
             .Where(x => x.Estado != false)
             .ToListAsync();
@@ -421,6 +423,7 @@ public class VentasImpresionController : ControllerBase
         var vendedores = await _context.Usuarios
             .AsNoTracking()
             .Include(x => x.Persona)
+            .Include(x => x.Sucursal)
             .ToDictionaryAsync(x => x.Id, NombreUsuario);
 
         var pedidosCargadosHoy = ventasDelDia.Count;
@@ -614,6 +617,7 @@ public class VentasImpresionController : ControllerBase
         var vendedores = await _context.Usuarios
             .AsNoTracking()
             .Include(x => x.Persona)
+            .Include(x => x.Sucursal)
             .Where(x => vendedorIds.Contains(x.Id))
             .ToDictionaryAsync(x => x.Id, NombreUsuario);
 
@@ -767,6 +771,7 @@ public class VentasImpresionController : ControllerBase
     private IQueryable<Models.VentaImpresionCab> Query()
     {
         return _context.VentasImpresionCab
+            .Include(x => x.Sucursal)
             .Include(x => x.Cliente)
             .Include(x => x.FormaPago)
             .Include(x => x.EstadoPago)

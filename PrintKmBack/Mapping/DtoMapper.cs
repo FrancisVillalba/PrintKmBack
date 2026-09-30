@@ -254,7 +254,9 @@ public static class DtoMapper
             string.IsNullOrWhiteSpace(perfilNombres) ? null : perfilNombres,
             perfilIds,
             string.IsNullOrWhiteSpace(perfilNombres) ? null : perfilNombres,
-            entity.Estado);
+            entity.Estado,
+            entity.SucursalId,
+            entity.Sucursal?.Nombre);
     }
 
     public static Usuario ToEntity(this UsuarioRequest request, Usuario? entity = null)
@@ -262,6 +264,7 @@ public static class DtoMapper
         entity ??= new Usuario();
         entity.NombreUsuario = request.NombreUsuario;
         entity.PersonaId = request.PersonaId;
+        entity.SucursalId = request.SucursalId ?? entity.SucursalId;
         entity.Estado = request.Estado;
         return entity;
     }
@@ -323,7 +326,9 @@ public static class DtoMapper
             entity.UsuarioEntregaPedidoId,
             entity.UsuarioEntregaPedido is null ? null : NombreUsuario(entity.UsuarioEntregaPedido),
             entity.FechaTomaDelivery,
-            entity.Detalles.Select(x => x.ToDto(estadosVenta)));
+            entity.Detalles.Select(x => x.ToDto(estadosVenta)),
+            entity.SucursalId,
+            entity.Sucursal?.Nombre);
     }
 
     public static VentaImpresionCab ToEntity(this VentaImpresionCabRequest request, VentaImpresionCab? entity = null)
